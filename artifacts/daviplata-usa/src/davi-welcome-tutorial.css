@@ -1,0 +1,292 @@
+.davi-intro-overlay {
+  position: fixed;
+  z-index: 2147483000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+  background: rgb(18 3 16 / 84%);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  color: #fff;
+  font-family: Manrope, Arial, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.davi-intro-overlay *,
+.davi-intro-overlay *::before,
+.davi-intro-overlay *::after {
+  box-sizing: border-box;
+}
+
+.davi-intro-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 440px);
+  min-height: min(600px, 82dvh);
+  max-height: min(92dvh, 820px);
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 35%);
+  border-radius: 20px;
+  background-position: center;
+  background-size: cover;
+  box-shadow: 0 24px 72px rgb(0 0 0 / 55%);
+  outline: none;
+  animation: davi-intro-rise 180ms ease-out;
+}
+
+.davi-intro-close {
+  position: absolute;
+  z-index: 2;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 55%);
+  border-radius: 50%;
+  background: rgb(18 0 17 / 50%);
+  color: #fff;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.davi-intro-scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 24px 22px 14px;
+  text-align: center;
+}
+
+.davi-intro-brand {
+  display: flex;
+  height: 54px;
+  justify-content: center;
+  margin: 0 0 9px;
+}
+
+.davi-intro-brand .davi-intro-mini-logo {
+  width: 54px;
+  height: 48px;
+}
+
+.davi-intro-card h1 {
+  margin: 0 36px 6px;
+  font-size: 25px;
+  font-weight: 750;
+  line-height: 1.2;
+}
+
+.davi-intro-community-name {
+  margin: 0 0 13px;
+  font-size: clamp(18px, 5vw, 23px);
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.davi-intro-note {
+  max-width: 340px;
+  margin: 0 auto 14px;
+  padding: 9px 12px;
+  border: 1px solid rgb(255 255 255 / 35%);
+  border-radius: 10px;
+  background: rgb(20 2 17 / 58%);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.davi-intro-copy {
+  max-width: 340px;
+  margin: 0 auto 15px;
+  color: rgb(255 255 255 / 93%);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.davi-intro-links {
+  display: grid;
+  width: 100%;
+  max-width: 360px;
+  gap: 8px;
+  margin: 0 auto;
+}
+
+.davi-intro-link {
+  display: grid;
+  grid-template-columns: 28px 1fr 18px;
+  min-height: 48px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid rgb(255 255 255 / 55%);
+  border-radius: 10px;
+  color: #fff;
+  text-align: center;
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 700;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 24%);
+}
+
+.davi-intro-link-owner,
+.davi-intro-link-admin {
+  background: linear-gradient(110deg, #c91432, #eb426b);
+}
+
+.davi-intro-link-group,
+.davi-intro-link-reference-two {
+  background: rgb(255 255 255 / 96%);
+  color: #a50d2b;
+}
+
+.davi-intro-link-reference {
+  background: linear-gradient(110deg, #8e1535, #c8395b);
+}
+
+.davi-intro-mini-logo {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 5px;
+  background: #fff;
+}
+
+.davi-intro-mini-logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.davi-intro-external {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.davi-intro-platform {
+  margin: 11px 0 0;
+  padding: 13px 14px;
+  border: 1px solid rgb(255 255 255 / 35%);
+  border-radius: 11px;
+  background: rgb(20 2 17 / 62%);
+  text-align: left;
+}
+
+.davi-intro-platform h2 {
+  margin: 0 0 7px;
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.davi-intro-platform ol {
+  margin: 0;
+  padding-left: 20px;
+  color: rgb(255 255 255 / 94%);
+  font-size: 13px;
+  line-height: 1.48;
+}
+
+.davi-intro-platform li + li {
+  margin-top: 4px;
+}
+
+.davi-intro-footer {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px max(14px, env(safe-area-inset-bottom));
+  border-top: 1px solid rgb(255 255 255 / 25%);
+  background: rgb(13 2 14 / 58%);
+}
+
+.davi-intro-secondary,
+.davi-intro-primary {
+  min-height: 42px;
+  border: 0;
+  border-radius: 22px;
+  padding: 8px 12px;
+  font: 600 13px Manrope, Arial, sans-serif;
+  cursor: pointer;
+}
+
+.davi-intro-secondary {
+  justify-self: start;
+  background: rgb(255 255 255 / 18%);
+  color: #fff;
+  white-space: nowrap;
+}
+
+.davi-intro-primary {
+  justify-self: end;
+  min-width: 98px;
+  background: linear-gradient(110deg, #cf1235, #ed3c72);
+  color: #fff;
+  font-size: 15px;
+}
+
+.davi-intro-dots {
+  color: rgb(255 255 255 / 78%);
+  font-size: 14px;
+  letter-spacing: 3px;
+  white-space: nowrap;
+}
+
+.davi-intro-overlay button:focus-visible,
+.davi-intro-overlay a:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+}
+
+@media (max-height: 700px) {
+  .davi-intro-card {
+    min-height: 0;
+    max-height: 94dvh;
+  }
+
+  .davi-intro-scroll {
+    padding-top: 15px;
+  }
+
+  .davi-intro-brand {
+    height: 42px;
+    margin-bottom: 5px;
+  }
+
+  .davi-intro-brand .davi-intro-mini-logo {
+    width: 44px;
+    height: 40px;
+  }
+
+  .davi-intro-card h1 {
+    font-size: 22px;
+  }
+
+  .davi-intro-link {
+    min-height: 42px;
+  }
+
+  .davi-intro-platform {
+    margin-top: 8px;
+    padding: 9px 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .davi-intro-card {
+    animation: none;
+  }
+}
+
+@keyframes davi-intro-rise {
+  from { opacity: .7; transform: translateY(8px) scale(.99); }
+  to { opacity: 1; transform: none; }
+}

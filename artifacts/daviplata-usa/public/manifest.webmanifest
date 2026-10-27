@@ -1,0 +1,26 @@
+{
+  "id": "./",
+  "name": "Daviplata",
+  "short_name": "Daviplata",
+  "description": "Simulador independiente de Daviplata. Los saldos, envíos y comprobantes son ficticios.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ed0714",
+  "theme_color": "#ed0714",
+  "icons": [
+    {
+      "src": "./daviplata-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./daviplata-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

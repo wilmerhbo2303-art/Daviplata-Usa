@@ -1,0 +1,25 @@
+{
+  "name": "daviplata-usa",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.26.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm --filter @workspace/daviplata-usa run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @workspace/daviplata-usa run typecheck"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "pino": "^9.14.0",
+    "pino-http": "^10.5.0",
+    "@workspace/api-zod": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.3.3",
+    "typescript": "~5.9.3"
+  }
+}
