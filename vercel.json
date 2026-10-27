@@ -1,4 +1,10 @@
 {
   "buildCommand": "pnpm run build",
-  "outputDirectory": "artifacts/daviplata-usa/dist/public"
+  "outputDirectory": "artifacts/daviplata-usa/dist/public",
+  "rewrites": [
+    {
+      "source": "/admin",
+      "destination": "/"
+    }
+  ]
 }
