@@ -23,6 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import { ProfileMenuScreen, ProfilePhotoScreen, type ProfileSection } from './ProfileScreens';
+import { daviplataApi, DaviplataApiError } from './lib/daviplata-api';
 import { lookupDaviplataBrebKey } from './lib/breb-lookup';
 import { parseBrebQrPayload } from './lib/qr-payload';
 import {
@@ -142,6 +143,7 @@ type AdminEditValues = {
 const STORAGE_KEY = 'daviplata-usa-video-demo-v2';
 const USERS_STORAGE_KEY = 'daviplata-usa-profiles-v1';
 const ACTIVE_PROFILE_STORAGE_KEY = 'daviplata-usa-active-profile-v1';
+const USER_TOKEN_STORAGE_KEY = 'daviplata-usa-user-token-v1';
 const STARTING_BALANCE = 5_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TRIAL_DURATION_MS = 60 * 60 * 1000;
@@ -509,6 +511,15 @@ function App() {
     window.location.pathname.replace(/\/+$/, '').endsWith('/admin') ||
     new URLSearchParams(window.location.search).get('admin') === '1';
   const [users, setUsers] = useState<DemoUser[]>(loadUsers);
+  const [userApiToken, setUserApiToken] = useState(() => {
+    try {
+      return sessionStorage.getItem(USER_TOKEN_STORAGE_KEY) ?? '';
+    } catch {
+      return '';
+    }
+  });
+  const [userSessionReady, setUserSessionReady] = useState(false);
+  const [adminProfilesReady, setAdminProfilesReady] = useState(false);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(() => {
     try {
       const savedId = localStorage.getItem(ACTIVE_PROFILE_STORAGE_KEY);
@@ -650,6 +661,47 @@ function App() {
   }, [adminRoute]);
 
   useEffect(() => {
+    if (adminAuthStatus !== 'unlocked') {
+      setAdminProfilesReady(false);
+      return;
+    }
+    let current = true;
+    void (async () => {
+      try {
+        let result = await daviplataApi<{ profiles: DemoUser[] }>('admin:listProfiles');
+        if (result.profiles.length === 0 && users.length > 0) {
+          await daviplataApi('admin:saveProfiles', {
+            migrate: true,
+            profiles: users.map((user) => ({ ...user, state: loadAccountData(user) })),
+          });
+          result = await daviplataApi<{ profiles: DemoUser[] }>('admin:listProfiles');
+        }
+        if (!current) return;
+        setUsers(result.profiles);
+        setAdminProfilesReady(true);
+        setAdminError('');
+      } catch (error) {
+        if (!current) return;
+        setAdminProfilesReady(false);
+        setAdminError(error instanceof Error ? error.message : 'No se pudo cargar la base de DaviPlata.');
+      }
+    })();
+    return () => { current = false; };
+  }, [adminAuthStatus]);
+
+  useEffect(() => {
+    if (adminAuthStatus !== 'unlocked' || !adminProfilesReady) return;
+    const timeout = window.setTimeout(() => {
+      void daviplataApi('admin:saveProfiles', { profiles: users })
+        .then(() => setAdminError(''))
+        .catch((error: unknown) => {
+          setAdminError(error instanceof Error ? error.message : 'No se pudieron guardar los perfiles.');
+        });
+    }, 350);
+    return () => window.clearTimeout(timeout);
+  }, [users, adminAuthStatus, adminProfilesReady]);
+
+  useEffect(() => {
     if (!accessAnimation) return;
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const duration = reducedMotion ? 120 : ACCESS_ANIMATION_DURATION[accessAnimation];
@@ -708,7 +760,7 @@ function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
+      localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users.map((user) => ({ ...user, pin: '' }))));
     } catch {
       // Keep profiles usable in memory if browser storage is unavailable.
     }
@@ -789,6 +841,30 @@ function App() {
       // The active session still works without persistence.
     }
   }, [activeProfileId, data]);
+
+  useEffect(() => {
+    if (!activeProfileId || !userApiToken || !userSessionReady) return;
+    const timeout = window.setTimeout(() => {
+      void daviplataApi('user:saveState', { state: data }, userApiToken).catch(() => {});
+    }, 600);
+    return () => window.clearTimeout(timeout);
+  }, [activeProfileId, data, userApiToken, userSessionReady]);
+
+  useEffect(() => {
+    if (!activeProfileId || !userApiToken || !userSessionReady) return;
+    const profile = users.find((user) => user.id === activeProfileId);
+    if (!profile) return;
+    const timeout = window.setTimeout(() => {
+      void daviplataApi('user:saveProfile', {
+        displayBalance: profile.displayBalance,
+        premiumEnabled: profile.premiumEnabled,
+        boldEnabled: profile.boldEnabled,
+        smsCredits: profile.smsCredits,
+        smsEnabled: profile.smsEnabled,
+      }, userApiToken).catch(() => {});
+    }, 400);
+    return () => window.clearTimeout(timeout);
+  }, [activeProfileId, users, userApiToken, userSessionReady]);
 
   useEffect(() => {
     if (!toast) return;
@@ -961,38 +1037,30 @@ function App() {
     setToast(`${label}: opción de demostración.`);
   };
 
-  const continueFromOnboarding = () => {
+  const continueFromOnboarding = async () => {
     const normalizedDocument = normalizeDigits(documentNumber);
     const normalizedPhone = normalizeDigits(loginPhone);
-    const matchingUser = users.find((user) =>
-      user.documentType === documentType &&
-      normalizeDigits(user.documentNumber) === normalizedDocument &&
-      normalizeDigits(user.phone) === normalizedPhone,
-    );
-    if (!matchingUser) {
-      setOnboardingError('No encontramos esos datos. Verifica el documento y el número de celular.');
-      return;
-    }
-    if (matchingUser.blocked) {
-      setOnboardingError('El acceso de este usuario está bloqueado. Contacta al administrador.');
-      return;
-    }
-    if (isTrialExpired(matchingUser)) {
-      removeUserLocalData(matchingUser.id);
-      setUsers((current) => current.filter((user) => user.id !== matchingUser.id));
-      setOnboardingError('El usuario de prueba venció y fue eliminado.');
-      return;
-    }
     setOnboardingError('');
-    setActiveProfileId(matchingUser.id);
     try {
-      localStorage.setItem(ACTIVE_PROFILE_STORAGE_KEY, matchingUser.id);
-    } catch {
-      // The user can still continue for this session if storage is blocked.
+      const result = await daviplataApi<{ profile: DemoUser }>('auth:identify', {
+        documentType,
+        documentNumber: normalizedDocument,
+        phone: normalizedPhone,
+      });
+      const profile = { ...result.profile, pin: '' };
+      setUsers((current) => current.some((user) => user.id === profile.id)
+        ? current.map((user) => user.id === profile.id ? { ...user, ...profile } : user)
+        : [...current, profile]);
+      setUserSessionReady(false);
+      setActiveProfileId(profile.id);
+      setData(loadAccountData(profile));
+      setHiddenBalance(false);
+      setScreen('welcome');
+    } catch (error) {
+      setOnboardingError(error instanceof Error
+        ? error.message
+        : 'No se pudieron comprobar los datos. Intenta de nuevo.');
     }
-    setData(loadAccountData(matchingUser));
-    setHiddenBalance(false);
-    setScreen('welcome');
   };
 
   const createAdminUser = (event: React.FormEvent<HTMLFormElement>) => {
@@ -1238,8 +1306,14 @@ function App() {
     setToast(user.blocked ? 'Acceso del usuario habilitado.' : 'Acceso del usuario bloqueado.');
   };
 
-  const deleteAdminUser = (user: DemoUser) => {
+  const deleteAdminUser = async (user: DemoUser) => {
     if (!window.confirm(`¿Eliminar el usuario ${user.name} y sus datos de demostración?`)) return;
+    try {
+      await daviplataApi('admin:deleteProfile', { id: user.id });
+    } catch (error) {
+      setAdminError(error instanceof Error ? error.message : 'No se pudo eliminar el usuario.');
+      return;
+    }
     removeUserLocalData(user.id);
     setUsers((current) => current.filter((item) => item.id !== user.id));
     if (createdUserId === user.id) setCreatedUserId(null);
@@ -1293,6 +1367,13 @@ function App() {
   };
 
   const returnToOnboarding = () => {
+    setUserSessionReady(false);
+    setUserApiToken('');
+    try {
+      sessionStorage.removeItem(USER_TOKEN_STORAGE_KEY);
+    } catch {
+      // The current screen can still return to onboarding.
+    }
     setActiveProfileId(null);
     try {
       localStorage.removeItem(ACTIVE_PROFILE_STORAGE_KEY);
@@ -1737,17 +1818,64 @@ function App() {
     setToast('Movimiento de demostración guardado.');
   };
 
+  const authenticateUserPin = async (pinValue: string) => {
+    if (!activeProfile) {
+      setToast('Vuelve a ingresar tus datos para continuar.');
+      return;
+    }
+    try {
+      const result = await daviplataApi<{
+        token: string;
+        profile: DemoUser;
+        state: DemoData | null;
+      }>('auth:login', { id: activeProfile.id, pin: pinValue });
+      const profile = { ...result.profile, pin: '' };
+      const biometricKey = `davi-usa:biometric:${profile.id}`;
+      const biometricTokenKey = `davi-usa:biometric-token:${profile.id}`;
+      try {
+        sessionStorage.setItem(USER_TOKEN_STORAGE_KEY, result.token);
+        if (localStorage.getItem(biometricKey)) {
+          localStorage.setItem(biometricTokenKey, result.token);
+        }
+      } catch {
+        // Keep this login usable even if browser storage is unavailable.
+      }
+      setUserApiToken(result.token);
+      setUsers((current) => current.some((user) => user.id === profile.id)
+        ? current.map((user) => user.id === profile.id ? { ...user, ...profile } : user)
+        : [...current, profile]);
+      setActiveProfileId(profile.id);
+      const savedState = result.state;
+      setData(savedState &&
+        typeof savedState.balance === 'number' &&
+        Array.isArray(savedState.contacts) &&
+        Array.isArray(savedState.movements)
+        ? savedState
+        : loadAccountData(profile));
+      setUserSessionReady(true);
+      setAccessAnimation('home-dark');
+    } catch (error) {
+      if (error instanceof DaviplataApiError && error.status === 401) {
+        setAccessAnimation('wrong-pin');
+        return;
+      }
+      if (error instanceof DaviplataApiError && (error.status === 403 || error.status === 410)) {
+        setPin('');
+        returnToOnboarding();
+      } else {
+        setPin('');
+      }
+      setToast(error instanceof Error ? error.message : 'No se pudo validar el PIN.');
+    }
+  };
+
   const addKeyDigit = (digit: string) => {
     if (pin.length >= 4 || accessAnimation || pinErrorOpen) return;
     const next = pin + digit;
     setPin(next);
     if (next.length === 4) {
       window.setTimeout(() => {
-        if (!activeProfile || next === activeProfile.pin) {
-          setAccessAnimation('home-dark');
-        } else {
-          setAccessAnimation('wrong-pin');
-        }
+        void authenticateUserPin(next);
       }, 260);
     }
   };
@@ -1784,7 +1912,12 @@ function App() {
       return;
     }
 
-    const storageKey = `davi-usa:biometric:${activeProfileId ?? 'demo-profile'}`;
+    if (!activeProfileId) {
+      setToast('Ingresa tus datos y tu PIN antes de activar la huella.');
+      return;
+    }
+    const storageKey = `davi-usa:biometric:${activeProfileId}`;
+    const biometricTokenKey = `davi-usa:biometric-token:${activeProfileId}`;
     try {
       const savedCredentialId = localStorage.getItem(storageKey);
       if (savedCredentialId) {
@@ -1800,6 +1933,34 @@ function App() {
         if (!assertion || encodeCredentialId(assertion.rawId) !== savedCredentialId) {
           throw new Error('Credential mismatch');
         }
+        const biometricToken = localStorage.getItem(biometricTokenKey);
+        if (!biometricToken) {
+          setToast('Ingresa una vez con tu PIN para activar el acceso con huella.');
+          return;
+        }
+        const result = await daviplataApi<{
+          profile: DemoUser;
+          state: DemoData | null;
+        }>('user:restore', {}, biometricToken);
+        const profile = { ...result.profile, pin: '' };
+        setUserApiToken(biometricToken);
+        try {
+          sessionStorage.setItem(USER_TOKEN_STORAGE_KEY, biometricToken);
+        } catch {
+          // The authenticated profile remains usable for this page session.
+        }
+        setUsers((current) => current.some((user) => user.id === profile.id)
+          ? current.map((user) => user.id === profile.id ? { ...user, ...profile } : user)
+          : [...current, profile]);
+        setActiveProfileId(profile.id);
+        const savedState = result.state;
+        setData(savedState &&
+          typeof savedState.balance === 'number' &&
+          Array.isArray(savedState.contacts) &&
+          Array.isArray(savedState.movements)
+          ? savedState
+          : loadAccountData(profile));
+        setUserSessionReady(true);
       } else {
         const credential = await navigator.credentials.create({
           publicKey: {
@@ -1822,13 +1983,26 @@ function App() {
         }) as PublicKeyCredential | null;
         if (!credential) throw new Error('Credential creation cancelled');
         localStorage.setItem(storageKey, encodeCredentialId(credential.rawId));
+        const existingToken = sessionStorage.getItem(USER_TOKEN_STORAGE_KEY);
+        if (existingToken) localStorage.setItem(biometricTokenKey, existingToken);
+        setToast('Huella registrada. Ingresa tu PIN una vez para activar el acceso.');
+        return;
       }
       setAccessAnimation('home-dark');
     } catch (error) {
+      if (error instanceof DaviplataApiError && (error.status === 401 || error.status === 403 || error.status === 410)) {
+        try {
+          localStorage.removeItem(biometricTokenKey);
+        } catch {
+          // The PIN fallback remains available.
+        }
+      }
       const cancelled = error instanceof DOMException && error.name === 'NotAllowedError';
       setToast(cancelled
         ? 'No se completó la verificación de huella.'
-        : 'No fue posible verificar la huella en este dispositivo.');
+        : error instanceof Error && error.message
+          ? error.message
+          : 'No fue posible verificar la huella en este dispositivo.');
     }
   };
 
@@ -2036,11 +2210,17 @@ function App() {
               <input type="number" min="0" step="1" value={adminSmsCredits} onChange={(event) => setAdminSmsCredits(event.target.value)} />
             </label>
             <p className="admin-hint">La cédula se genera al azar al crear el perfil.</p>
-            <p className="admin-data-note">Se guardan solo en este navegador. Usa datos y PIN ficticios, nunca claves reales.</p>
+            <p className="admin-data-note">
+              {adminProfilesReady
+                ? 'Perfiles guardados en la base privada de DaviPlata.'
+                : 'Conectando con la base privada de DaviPlata…'}
+              {' '}Usa datos y PIN ficticios, nunca claves reales.
+            </p>
+            {!adminProfilesReady && !adminError && <p role="status">Cargando perfiles…</p>}
             {adminError && <p className="admin-error" role="alert">{adminError}</p>}
-            <button className="red-button" type="submit">Crear usuario</button>
+            <button className="red-button" type="submit" disabled={!adminProfilesReady}>Crear usuario</button>
           </form>
-          <button className="red-button admin-test-user-button" type="button" onClick={createTestUser}>
+          <button className="red-button admin-test-user-button" type="button" onClick={createTestUser} disabled={!adminProfilesReady}>
             Crear usuario de prueba · 1 hora
           </button>
           {createdUser && (
@@ -2249,7 +2429,7 @@ function App() {
             <button
               className="pin-biometric"
               onClick={startFingerprintDemo}
-              aria-label="Ingresar con huella, acceso de demostración"
+              aria-label="Ingresar o activar huella del dispositivo"
               data-testid="button-pin-biometric"
             >
               <Fingerprint size={31} strokeWidth={1.7} />

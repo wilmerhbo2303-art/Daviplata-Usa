@@ -9,6 +9,7 @@ import {
 
 const router: IRouter = Router();
 const cookieName = "davi_admin_session";
+const cookiePath = "/api/daviplata";
 const sessionLifetimeMs = 8 * 60 * 60 * 1000;
 const failedAttempts = new Map<string, { count: number; resetAt: number }>();
 const failedAttemptLimit = 8;
@@ -35,16 +36,15 @@ function hasValidAdminSession(request: Request) {
   const payload = token.slice(0, separator);
   const suppliedSignature = Buffer.from(token.slice(separator + 1));
   const expectedSignature = Buffer.from(makeSignature(payload, secret));
-  if (suppliedSignature.length !== expectedSignature.length ||
-      !timingSafeEqual(suppliedSignature, expectedSignature)) return false;
+  if (suppliedSignature.length !== expectedSignature.length || !timingSafeEqual(suppliedSignature, expectedSignature)) {
+    return false;
+  }
   const expiresAt = Number(Buffer.from(payload, "base64url").toString("utf8"));
   return Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
 
 router.get("/daviplata/admin/session", (request, response) => {
-  response.json(GetDaviplataAdminSessionResponse.parse({
-    authenticated: hasValidAdminSession(request),
-  }));
+  response.json(GetDaviplataAdminSessionResponse.parse({ authenticated: hasValidAdminSession(request) }));
 });
 
 router.post("/daviplata/admin/session", (request, response) => {
@@ -53,30 +53,25 @@ router.post("/daviplata/admin/session", (request, response) => {
     response.status(400).json({ error: "Invalid request body." });
     return;
   }
-
   const expectedPin = process.env.DAVIPLATA_ADMIN_PIN;
   const sessionSecret = process.env.SESSION_SECRET;
   if (!expectedPin || !sessionSecret) {
     response.status(503).json({ error: "Admin authentication is not configured." });
     return;
   }
-
   const now = Date.now();
   const attemptKey = request.ip || "unknown";
-  const previousAttempts = failedAttempts.get(attemptKey);
-  if (previousAttempts && previousAttempts.resetAt <= now) failedAttempts.delete(attemptKey);
-  const activeAttempts = failedAttempts.get(attemptKey);
-  if (activeAttempts && activeAttempts.count >= failedAttemptLimit) {
+  const previous = failedAttempts.get(attemptKey);
+  if (previous && previous.resetAt <= now) failedAttempts.delete(attemptKey);
+  const current = failedAttempts.get(attemptKey);
+  if (current && current.count >= failedAttemptLimit) {
     response.status(429).json({ error: "Too many failed attempts. Try again later." });
     return;
   }
-
   const suppliedPin = Buffer.from(parsed.data.pin);
   const expectedPinBuffer = Buffer.from(expectedPin);
-  const validPin = suppliedPin.length === expectedPinBuffer.length &&
-    timingSafeEqual(suppliedPin, expectedPinBuffer);
+  const validPin = suppliedPin.length === expectedPinBuffer.length && timingSafeEqual(suppliedPin, expectedPinBuffer);
   if (!validPin) {
-    const current = failedAttempts.get(attemptKey);
     failedAttempts.set(attemptKey, {
       count: (current?.count ?? 0) + 1,
       resetAt: current?.resetAt ?? now + failedAttemptWindowMs,
@@ -84,7 +79,6 @@ router.post("/daviplata/admin/session", (request, response) => {
     response.status(401).json({ error: "Invalid PIN." });
     return;
   }
-
   failedAttempts.delete(attemptKey);
   const payload = Buffer.from(String(now + sessionLifetimeMs)).toString("base64url");
   const token = `${payload}.${makeSignature(payload, sessionSecret)}`;
@@ -92,13 +86,19 @@ router.post("/daviplata/admin/session", (request, response) => {
     httpOnly: true,
     sameSite: "strict",
     secure: process.env.NODE_ENV === "production",
-    path: "/api/daviplata/admin",
+    path: cookiePath,
     maxAge: sessionLifetimeMs,
   });
   response.json(CreateDaviplataAdminSessionResponse.parse({ authenticated: true }));
 });
 
 router.delete("/daviplata/admin/session", (_request, response) => {
+  response.clearCookie(cookieName, {
+    httpOnly: true,
+    sameSite: "strict",
+    secure: process.env.NODE_ENV === "production",
+    path: cookiePath,
+  });
   response.clearCookie(cookieName, {
     httpOnly: true,
     sameSite: "strict",
