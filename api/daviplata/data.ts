@@ -104,10 +104,30 @@ function hasAdminSession(request: Request) {
   }
 }
 
-function createUserToken(profileId: string) {
+function hashDeviceToken(token: string) {
+  return createHash("sha256").update(`daviplata-device-v1:${token}`).digest("hex");
+}
+
+function deviceTokenGeneration(token: string) {
+  const separator = token.indexOf(".");
+  if (separator < 1) return null;
+  const generation = Number(token.slice(0, separator));
+  const secret = token.slice(separator + 1);
+  return Number.isSafeInteger(generation) && generation >= 0 && secret.length >= 32
+    ? generation
+    : null;
+}
+
+function createDeviceToken(generation: number) {
+  return `${generation}.${randomBytes(32).toString("base64url")}`;
+}
+
+function createUserToken(profileId: string, deviceHash: string, deviceGeneration: number) {
   const payload = Buffer.from(JSON.stringify({
     sub: profileId,
     exp: Date.now() + userTokenLifetimeMs,
+    deviceHash,
+    deviceGeneration,
   })).toString("base64url");
   return `${payload}.${sign(payload)}`;
 }
@@ -124,9 +144,23 @@ function readUserToken(request: Request) {
     const payload = JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8")) as {
       sub?: string;
       exp?: number;
+      deviceHash?: string;
+      deviceGeneration?: number;
     };
-    if (typeof payload.sub !== "string" || !payload.sub || Number(payload.exp) <= Date.now()) return null;
-    return payload.sub;
+    if (
+      typeof payload.sub !== "string" ||
+      !payload.sub ||
+      Number(payload.exp) <= Date.now() ||
+      typeof payload.deviceHash !== "string" ||
+      !/^[a-f0-9]{64}$/.test(payload.deviceHash) ||
+      !Number.isSafeInteger(payload.deviceGeneration) ||
+      Number(payload.deviceGeneration) < 0
+    ) return null;
+    return {
+      profileId: payload.sub,
+      deviceHash: payload.deviceHash,
+      deviceGeneration: Number(payload.deviceGeneration),
+    };
   } catch {
     return null;
   }
@@ -385,21 +419,92 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
         response.status(401).json({ error: "PIN incorrecto." });
         return;
       }
+      const deviceGeneration = Number(row.device_generation ?? 0);
+      const suppliedDeviceToken = typeof body.deviceToken === "string" ? body.deviceToken : "";
+      let deviceToken = suppliedDeviceToken;
+      let deviceHash = "";
+      if (suppliedDeviceToken) {
+        if (deviceTokenGeneration(suppliedDeviceToken) !== deviceGeneration) {
+          response.status(409).json({
+            error: "Este dispositivo fue liberado. Ingresa desde otro dispositivo o pide al administrador que vuelva a vincularlo.",
+          });
+          return;
+        }
+        deviceHash = hashDeviceToken(suppliedDeviceToken);
+        if (row.device_token_hash) {
+          if (!safeEqual(deviceHash, String(row.device_token_hash))) {
+            response.status(409).json({
+              error: "La cuenta está vinculada a otro dispositivo. Pide al administrador que libere el acceso.",
+            });
+            return;
+          }
+        } else {
+          await d1(
+            `UPDATE davi_profiles SET device_token_hash = ?, updated_at = ?
+             WHERE id = ? AND device_token_hash IS NULL AND device_generation = ?`,
+            [deviceHash, new Date().toISOString(), id, deviceGeneration],
+          );
+          const boundProfile = await findProfileById(id);
+          if (!boundProfile || !safeEqual(String(boundProfile.device_token_hash ?? ""), deviceHash)) {
+            response.status(409).json({
+              error: "Otro dispositivo vinculó esta cuenta primero. Pide al administrador que libere el acceso.",
+            });
+            return;
+          }
+        }
+      } else {
+        if (row.device_token_hash) {
+          response.status(409).json({
+            error: "La cuenta está vinculada a otro dispositivo. Pide al administrador que libere el acceso.",
+          });
+          return;
+        }
+        deviceToken = createDeviceToken(deviceGeneration);
+        deviceHash = hashDeviceToken(deviceToken);
+        await d1(
+          `UPDATE davi_profiles SET device_token_hash = ?, updated_at = ?
+           WHERE id = ? AND device_token_hash IS NULL AND device_generation = ?`,
+          [deviceHash, new Date().toISOString(), id, deviceGeneration],
+        );
+        const boundProfile = await findProfileById(id);
+        if (!boundProfile || !safeEqual(String(boundProfile.device_token_hash ?? ""), deviceHash)) {
+          response.status(409).json({
+            error: "Otro dispositivo vinculó esta cuenta primero. Pide al administrador que libere el acceso.",
+          });
+          return;
+        }
+      }
       await clearAttempts(request, "login");
-      const token = createUserToken(id);
-      response.json({ token, profile: mapProfile(row), state: await readState(id) });
+      const token = createUserToken(id, deviceHash, deviceGeneration);
+      response.json({
+        token,
+        deviceToken,
+        profile: mapProfile(row),
+        state: await readState(id),
+      });
       return;
     }
 
     if (action === "user:restore" || action === "user:saveState" || action === "user:saveProfile") {
-      const profileId = readUserToken(request);
-      if (!profileId) {
+      const userSession = readUserToken(request);
+      if (!userSession) {
         response.status(401).json({ error: "La sesión venció. Ingresa con tu PIN." });
         return;
       }
+      const profileId = userSession.profileId;
       const row = await findProfileById(profileId);
       if (!row || Number(row.blocked) === 1) {
         response.status(403).json({ error: "El acceso de este usuario está bloqueado." });
+        return;
+      }
+      if (
+        !row.device_token_hash ||
+        !safeEqual(String(row.device_token_hash), userSession.deviceHash) ||
+        Number(row.device_generation ?? 0) !== userSession.deviceGeneration
+      ) {
+        response.status(401).json({
+          error: "Este dispositivo ya no tiene acceso. Ingresa con el PIN desde el dispositivo autorizado.",
+        });
         return;
       }
       if (Number(row.is_trial) === 1 && row.trial_expires_at !== null && Number(row.trial_expires_at) <= Date.now()) {
@@ -447,7 +552,27 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
       if (action === "admin:listProfiles") {
         await clearExpiredTrials();
         const result = await d1<Record<string, unknown>>("SELECT * FROM davi_profiles ORDER BY created_at DESC");
-        response.json({ profiles: (result.results ?? []).map((row) => mapProfile(row, decryptPin(String(row.pin_encrypted)))) });
+        response.json({
+          profiles: (result.results ?? []).map((row) => ({
+            ...mapProfile(row, decryptPin(String(row.pin_encrypted))),
+            deviceBound: Boolean(row.device_token_hash),
+          })),
+        });
+        return;
+      }
+      if (action === "admin:releaseDevice") {
+        const id = String(body.id ?? "");
+        if (!id || !await findProfileById(id)) {
+          response.status(404).json({ error: "No se encontró el usuario." });
+          return;
+        }
+        await d1(
+          `UPDATE davi_profiles
+           SET device_token_hash = NULL, device_generation = device_generation + 1, updated_at = ?
+           WHERE id = ?`,
+          [new Date().toISOString(), id],
+        );
+        response.json({ released: true, deviceBound: false });
         return;
       }
       if (action === "admin:saveProfiles") {

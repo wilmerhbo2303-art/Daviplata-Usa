@@ -124,6 +124,7 @@ type DemoUser = {
   blocked: boolean;
   isTrial: boolean;
   trialExpiresAt: number | null;
+  deviceBound?: boolean;
 };
 type AdminEditValues = {
   name: string;
@@ -845,7 +846,12 @@ function App() {
   useEffect(() => {
     if (!activeProfileId || !userApiToken || !userSessionReady) return;
     const timeout = window.setTimeout(() => {
-      void daviplataApi('user:saveState', { state: data }, userApiToken).catch(() => {});
+      void daviplataApi('user:saveState', { state: data }, userApiToken).catch((error) => {
+        if (error instanceof DaviplataApiError && [401, 403, 410].includes(error.status)) {
+          returnToOnboarding();
+          setToast(error.message);
+        }
+      });
     }, 600);
     return () => window.clearTimeout(timeout);
   }, [activeProfileId, data, userApiToken, userSessionReady]);
@@ -861,10 +867,44 @@ function App() {
         boldEnabled: profile.boldEnabled,
         smsCredits: profile.smsCredits,
         smsEnabled: profile.smsEnabled,
-      }, userApiToken).catch(() => {});
+      }, userApiToken).catch((error) => {
+        if (error instanceof DaviplataApiError && [401, 403, 410].includes(error.status)) {
+          returnToOnboarding();
+          setToast(error.message);
+        }
+      });
     }, 400);
     return () => window.clearTimeout(timeout);
   }, [activeProfileId, users, userApiToken, userSessionReady]);
+
+  useEffect(() => {
+    if (!activeProfileId || !userApiToken || !userSessionReady) return;
+    let active = true;
+    const validateSession = async () => {
+      try {
+        await daviplataApi('user:restore', {}, userApiToken);
+      } catch (error) {
+        if (
+          active &&
+          error instanceof DaviplataApiError &&
+          [401, 403, 410].includes(error.status)
+        ) {
+          returnToOnboarding();
+          setToast(error.message);
+        }
+      }
+    };
+    const interval = window.setInterval(() => void validateSession(), 30_000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') void validateSession();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [activeProfileId, userApiToken, userSessionReady]);
 
   useEffect(() => {
     if (!toast) return;
@@ -1184,6 +1224,50 @@ function App() {
       setToast('Datos del usuario copiados.');
     } catch {
       setToast('No se pudieron copiar los datos en este navegador.');
+    }
+  };
+
+  const copyProfileAccess = async (user: DemoUser) => {
+    const details = [
+      `Nombre: ${user.name}`,
+      `${user.documentType}: ${user.documentNumber}`,
+      `Celular: ${user.phone}`,
+      `PIN: ${user.pin}`,
+    ].join('\n');
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(details);
+      } else {
+        const field = document.createElement('textarea');
+        field.value = details;
+        field.style.position = 'fixed';
+        field.style.opacity = '0';
+        document.body.appendChild(field);
+        field.select();
+        const copied = document.execCommand('copy');
+        field.remove();
+        if (!copied) throw new Error('clipboard unavailable');
+      }
+      setToast('Accesos copiados.');
+    } catch {
+      setToast('No se pudieron copiar los accesos en este navegador.');
+    }
+  };
+
+  const releaseAdminUserDevice = async (user: DemoUser) => {
+    if (!user.deviceBound) return;
+    const confirmed = window.confirm(
+      `¿Liberar el dispositivo de ${user.name}? Sus sesiones actuales dejarán de funcionar. Su PIN y sus datos no cambiarán.`,
+    );
+    if (!confirmed) return;
+    try {
+      await daviplataApi('admin:releaseDevice', { id: user.id });
+      setUsers((current) => current.map((item) => item.id === user.id
+        ? { ...item, deviceBound: false }
+        : item));
+      setToast('Dispositivo liberado. Puede ingresar desde otro dispositivo con el mismo PIN.');
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'No se pudo liberar el dispositivo.');
     }
   };
 
@@ -1826,6 +1910,7 @@ function App() {
     try {
       const result = await daviplataApi<{
         token: string;
+        deviceToken: string;
         profile: DemoUser;
         state: DemoData | null;
       }>('auth:login', { id: activeProfile.id, pin: pinValue });
@@ -2236,11 +2321,13 @@ function App() {
                 <span>Se elimina: {new Date(createdUser.trialExpiresAt).toLocaleString('es-CO')}</span>
               )}
               <span>PIN inicial: {createdUser.pin}</span>
+              <button className="admin-copy-button" type="button" onClick={() => void copyProfileAccess(createdUser)}>Copiar accesos</button>
               <button className="admin-copy-button" type="button" onClick={() => void copyProfileDetails(createdUser)}>Copiar todos los datos</button>
             </section>
           )}
           <section className="admin-users">
             <h2>Usuarios creados</h2>
+            <p className="admin-user-hint">Cada usuario se vincula al primer dispositivo que inicia sesión. Para cambiarlo, libera el dispositivo desde este panel; el PIN no cambia.</p>
             {users.length ? users.map((user) => (
               <article className="admin-user-row" key={user.id}>
                 <strong>{user.name}</strong>
@@ -2253,10 +2340,12 @@ function App() {
                 <span>Bold: {entitlementDaysRemaining(user.boldExpiresAt, entitlementClock)} días · {user.boldEnabled ? 'activado' : 'desactivado'}</span>
                 <span>SMS: {user.smsCredits} créditos · {user.smsEnabled ? 'activado' : 'desactivado'}</span>
                 <span>Acceso: {user.blocked ? 'Bloqueado' : 'Activo'}{user.isTrial && user.trialExpiresAt ? ` · prueba hasta ${new Date(user.trialExpiresAt).toLocaleString('es-CO')}` : ''}</span>
+                <span>Dispositivo: {user.deviceBound ? 'vinculado' : 'sin vincular'}</span>
                 <div className="admin-user-actions">
                   <button type="button" onClick={() => void copyProfileDetails(user)}>Copiar todos los datos</button>
                   <button type="button" onClick={() => startEditingUser(user)}>Editar usuario</button>
                   <button type="button" onClick={() => toggleAdminUserBlocked(user)}>{user.blocked ? 'Desbloquear acceso' : 'Bloquear acceso'}</button>
+                  {user.deviceBound && <button type="button" onClick={() => void releaseAdminUserDevice(user)}>Liberar dispositivo</button>}
                   <button type="button" className="admin-delete-user" onClick={() => deleteAdminUser(user)}>Eliminar usuario</button>
                 </div>
                 {editingUserId === user.id && adminEdit && (
