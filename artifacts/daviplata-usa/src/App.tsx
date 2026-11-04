@@ -2075,20 +2075,57 @@ function App() {
       }
       setAccessAnimation('home-dark');
     } catch (error) {
-      if (error instanceof DaviplataApiError && (error.status === 401 || error.status === 403 || error.status === 410)) {
+      const invalidSession = error instanceof DaviplataApiError &&
+        (error.status === 401 || error.status === 403 || error.status === 410);
+      if (invalidSession) {
         try {
           localStorage.removeItem(biometricTokenKey);
         } catch {
           // The PIN fallback remains available.
         }
+        setPin('');
+        setScreen('pin');
+        setToast('Ingresa tu PIN para volver a activar el acceso con huella.');
+        return;
       }
       const cancelled = error instanceof DOMException && error.name === 'NotAllowedError';
+      if (cancelled) {
+        setPin('');
+        setScreen('pin');
+      }
       setToast(cancelled
-        ? 'No se completó la verificación de huella.'
+        ? 'No se completó la huella. Puedes ingresar con tu PIN.'
         : error instanceof Error && error.message
           ? error.message
           : 'No fue posible verificar la huella en este dispositivo.');
     }
+  };
+
+  const handleWelcomeLogin = () => {
+    if (accessAnimation) return;
+    const profileId = activeProfileId;
+    if (!profileId) {
+      startPinEntry();
+      return;
+    }
+
+    let biometricReady = false;
+    try {
+      const supported = window.isSecureContext &&
+        typeof window.PublicKeyCredential !== 'undefined' &&
+        Boolean(navigator.credentials);
+      biometricReady = supported &&
+        Boolean(localStorage.getItem(`davi-usa:biometric:${profileId}`)) &&
+        Boolean(localStorage.getItem(`davi-usa:biometric-token:${profileId}`));
+    } catch {
+      biometricReady = false;
+    }
+
+    if (biometricReady) {
+      void startFingerprintDemo();
+      return;
+    }
+    startPinEntry();
   };
 
   const receiptPayload = currentMovement
@@ -2462,7 +2499,7 @@ function App() {
               Cambiar número
             </button>
           </div>
-          <button className="red-button welcome-enter" onClick={startPinEntry} data-testid="button-login">
+          <button className="red-button welcome-enter" onClick={handleWelcomeLogin} data-testid="button-login">
             Ingresar
           </button>
           <button className="underlined-button" onClick={returnToOnboarding}>
