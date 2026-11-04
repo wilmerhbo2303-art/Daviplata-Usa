@@ -573,6 +573,7 @@ function App() {
   const [topesReturnTo, setTopesReturnTo] = useState<Screen>('home');
   const [pin, setPin] = useState(previewPinError ? '1234' : '');
   const [pinErrorOpen, setPinErrorOpen] = useState(previewPinError);
+  const [autoFingerprintAfterPin, setAutoFingerprintAfterPin] = useState(false);
   const [hiddenBalance, setHiddenBalance] = useState(() =>
     import.meta.env.DEV && new URLSearchParams(window.location.search).get('hiddenBalance') === '1',
   );
@@ -1033,9 +1034,10 @@ function App() {
     if (next !== 'receipt' && next !== 'movement-detail') setCurrentMovement(null);
   };
 
-  const startPinEntry = () => {
+  const startPinEntry = (autoFingerprint = false) => {
     if (accessAnimation) return;
     if (activeProfile?.blocked || (activeProfile && isTrialExpired(activeProfile))) {
+      setAutoFingerprintAfterPin(false);
       setActiveProfileId(null);
       setScreen('onboarding');
       if (activeProfile?.isTrial) {
@@ -1049,6 +1051,7 @@ function App() {
     }
     setPin('');
     setPinErrorOpen(false);
+    setAutoFingerprintAfterPin(autoFingerprint);
     setAccessAnimation('to-pin');
   };
 
@@ -2104,29 +2107,26 @@ function App() {
   const handleWelcomeLogin = () => {
     if (accessAnimation) return;
     const profileId = activeProfileId;
-    if (!profileId) {
-      startPinEntry();
-      return;
-    }
-
     let biometricReady = false;
     try {
       const supported = window.isSecureContext &&
         typeof window.PublicKeyCredential !== 'undefined' &&
         Boolean(navigator.credentials);
-      biometricReady = supported &&
+      biometricReady = Boolean(profileId) && supported &&
         Boolean(localStorage.getItem(`davi-usa:biometric:${profileId}`)) &&
         Boolean(localStorage.getItem(`davi-usa:biometric-token:${profileId}`));
     } catch {
       biometricReady = false;
     }
 
-    if (biometricReady) {
-      void startFingerprintDemo();
-      return;
-    }
-    startPinEntry();
+    startPinEntry(biometricReady);
   };
+
+  useEffect(() => {
+    if (!autoFingerprintAfterPin || screen !== 'pin' || accessAnimation) return;
+    setAutoFingerprintAfterPin(false);
+    void startFingerprintDemo();
+  }, [accessAnimation, autoFingerprintAfterPin, screen, startFingerprintDemo]);
 
   const receiptPayload = currentMovement
     ? [
