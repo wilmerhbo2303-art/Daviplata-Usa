@@ -391,8 +391,6 @@ async function clearExpiredTrials() {
   await d1("DELETE FROM davi_profiles WHERE is_trial = 1 AND trial_expires_at <= ?", [now]);
   for (const profile of expiredProfiles) {
     await notifyAdminTelegram({
-      token: process.env.TELEGRAM_BOT_TOKEN,
-      chatId: process.env.TELEGRAM_ADMIN_CHAT_ID,
       app: "DaviPlata",
       event: "Usuario de prueba eliminado al vencer",
       fields: {
@@ -652,8 +650,6 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
           [new Date().toISOString(), id],
         );
         await notifyAdminTelegram({
-          token: process.env.TELEGRAM_BOT_TOKEN,
-          chatId: process.env.TELEGRAM_ADMIN_CHAT_ID,
           app: "DaviPlata",
           event: "Dispositivo liberado",
           userAgent: request.headers["user-agent"] ?? "",
@@ -695,8 +691,6 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
           if (body.migrate === true && profile.state) await saveState(profile.id, profile.state);
           if (body.migrate !== true && !previous) {
             await notifyAdminTelegram({
-              token: process.env.TELEGRAM_BOT_TOKEN,
-              chatId: process.env.TELEGRAM_ADMIN_CHAT_ID,
               app: "DaviPlata",
               event: profile.isTrial ? "Usuario de prueba creado" : "Usuario creado",
               userAgent: request.headers["user-agent"] ?? "",
@@ -704,8 +698,6 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
             });
           } else if (body.migrate !== true && changes.length > 0) {
             await notifyAdminTelegram({
-              token: process.env.TELEGRAM_BOT_TOKEN,
-              chatId: process.env.TELEGRAM_ADMIN_CHAT_ID,
               app: "DaviPlata",
               event: "Perfil de usuario actualizado",
               userAgent: request.headers["user-agent"] ?? "",
@@ -726,8 +718,6 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
         await d1("DELETE FROM davi_profiles WHERE id = ?", [id]);
         if (profile) {
           await notifyAdminTelegram({
-            token: process.env.TELEGRAM_BOT_TOKEN,
-            chatId: process.env.TELEGRAM_ADMIN_CHAT_ID,
             app: "DaviPlata",
             event: "Usuario eliminado",
             userAgent: request.headers["user-agent"] ?? "",

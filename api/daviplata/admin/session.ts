@@ -139,8 +139,6 @@ export default async function handler(request: any, response: any) {
   const cookie = `${cookieName}=${token}; ${cookieOptions(sessionLifetimeMs)}`;
   const userAgent = request.headers["user-agent"];
   await notifyAdminTelegram({
-    token: process.env.TELEGRAM_BOT_TOKEN,
-    chatId: process.env.TELEGRAM_ADMIN_CHAT_ID,
     app: "DaviPlata",
     event: "Ingreso exitoso al panel administrativo",
     userAgent: Array.isArray(userAgent) ? userAgent[0] : String(userAgent ?? ""),
