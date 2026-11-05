@@ -392,6 +392,7 @@ async function clearExpiredTrials() {
   for (const profile of expiredProfiles) {
     await notifyAdminTelegram({
       app: "DaviPlata",
+      adminName: "Sistema automático",
       event: "Usuario de prueba eliminado al vencer",
       fields: {
         Nombre: profile.name,

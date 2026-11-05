@@ -562,6 +562,7 @@ const [adminDisplayName, setAdminDisplayName] = useState(() => {
 const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
   try { return Boolean(window.localStorage.getItem('daviplata-admin-name-v1')?.trim()); } catch { return false; }
 });
+  const [adminNameStep, setAdminNameStep] = useState(false);
   const [adminAuthStatus, setAdminAuthStatus] = useState<'checking' | 'locked' | 'unlocked'>(() =>
     adminRoute ? 'checking' : 'locked',
   );
@@ -1491,6 +1492,7 @@ const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
     window.history.replaceState({}, '', url);
     setAdminAuthStatus('locked');
     setAdminAccessPin('');
+    setAdminNameStep(false);
     const signedInUser = users.find((user) => user.id === activeProfileId);
     if (signedInUser && !signedInUser.blocked && !(signedInUser.isTrial && signedInUser.trialExpiresAt !== null && signedInUser.trialExpiresAt <= Date.now())) {
       setScreen('welcome');
@@ -1503,6 +1505,14 @@ const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
   const submitAdminAccess = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setAdminAccessError('');
+    if (!adminDisplayNameSaved && !adminNameStep) {
+      if (!adminAccessPin) {
+        setAdminAccessError('Escribe el PIN de administrador.');
+        return;
+      }
+      setAdminNameStep(true);
+      return;
+    }
     const resolvedAdminName = adminDisplayName.trim().slice(0, 60);
     if (!resolvedAdminName) {
       setAdminAccessError('Escribe tu nombre de administrador.');
@@ -1518,6 +1528,8 @@ const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
       });
       if (!response.ok) {
         setAdminAuthStatus('locked');
+        setAdminNameStep(false);
+        setAdminAccessPin('');
         setAdminAccessError(response.status === 503
           ? 'El acceso del panel aún no está configurado.'
           : response.status === 429
@@ -1535,6 +1547,7 @@ const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
       setAdminDisplayName(resolvedAdminName);
       setAdminDisplayNameSaved(true);
       setAdminAccessPin('');
+      setAdminNameStep(false);
       setAdminAuthStatus('unlocked');
     } catch {
       setAdminAuthStatus('locked');
@@ -2307,6 +2320,7 @@ const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
         <main className="admin-screen">
           <header className="admin-header">
             <button className="plain-icon" onClick={leaveAdmin} aria-label="Ir al ingreso"><ArrowLeft size={23} /></button>
+            <span title={adminDisplayName} style={{ maxWidth: '34vw', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 600 }}>{adminDisplayName}</span>
             <DaviLogo />
             <span />
           </header>
@@ -2468,7 +2482,7 @@ const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
             <span />
           </header>
           <h1>Panel de administración</h1>
-          <p className="admin-intro">Acceso protegido. Ingresa el PIN. El nombre se guarda para tus próximos ingresos.</p>
+          <p className="admin-intro">{adminNameStep ? 'Escribe tu nombre para abrir el panel.' : 'Acceso protegido. Ingresa el PIN de administrador.'}</p>
           {adminAuthStatus === 'checking' && <p role="status">Verificando acceso…</p>}
           <form className="admin-create-form" onSubmit={submitAdminAccess}>
             <input
@@ -2481,36 +2495,41 @@ const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
               tabIndex={-1}
               aria-hidden="true"
             />
-            <label>
-              PIN de administrador
-              <input
-                required
-                type="password"
-                inputMode="numeric"
-                autoComplete="current-password"
-                value={adminAccessPin}
-                onChange={(event) => { setAdminAccessPin(event.target.value); setAdminAccessError(''); }}
-                aria-label="PIN de administrador"
-              />
-            </label>
-            <label>
-              {adminDisplayNameSaved ? 'Administrador registrado' : '¿Cuál es tu nombre de administrador?'}
-              <input
-                required
-                type="text"
-                autoComplete="name"
-                maxLength={60}
-                value={adminDisplayName}
-                onChange={(event) => { setAdminDisplayName(event.target.value); setAdminAccessError(''); }}
-                readOnly={adminDisplayNameSaved}
-                aria-label="Nombre de administrador"
-              />
-              <small>{adminDisplayNameSaved ? 'Nombre guardado en este dispositivo.' : 'Solo se solicitará la primera vez en este dispositivo.'}</small>
-            </label>
+            {!adminNameStep ? (
+              <label>
+                PIN de administrador
+                <input
+                  required
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="current-password"
+                  value={adminAccessPin}
+                  onChange={(event) => { setAdminAccessPin(event.target.value); setAdminAccessError(''); }}
+                  aria-label="PIN de administrador"
+                />
+              </label>
+            ) : (
+              <label>
+                ¿Cuál es tu nombre de administrador?
+                <input
+                  required
+                  type="text"
+                  autoComplete="name"
+                  maxLength={60}
+                  value={adminDisplayName}
+                  onChange={(event) => { setAdminDisplayName(event.target.value); setAdminAccessError(''); }}
+                  autoFocus
+                  aria-label="Nombre de administrador"
+                />
+                <small>Al continuar se abrirá el panel y el nombre quedará guardado en este dispositivo.</small>
+              </label>
+            )}
+            {adminDisplayNameSaved && !adminNameStep && <p className="admin-intro">Administrador: {adminDisplayName}</p>}
             {adminAccessError && <p className="admin-error" role="alert">{adminAccessError}</p>}
-            <button type="submit" disabled={!adminAccessPin || !adminDisplayName.trim() || adminAuthStatus === 'checking'}>
-              {adminAuthStatus === 'checking' ? 'Verificando…' : 'Entrar al panel'}
+            <button type="submit" disabled={adminAuthStatus === 'checking' || (adminNameStep ? !adminDisplayName.trim() : !adminAccessPin)}>
+              {adminAuthStatus === 'checking' ? 'Verificando…' : adminNameStep || adminDisplayNameSaved ? 'Entrar al panel' : 'Continuar'}
             </button>
+            {adminNameStep && <button type="button" className="admin-back-link" onClick={() => { setAdminNameStep(false); setAdminAccessError(''); }}>Volver al PIN</button>}
           </form>
           <button className="admin-back-link" onClick={leaveAdmin}>Volver al ingreso</button>
         </main>
