@@ -31,6 +31,7 @@ export function describeAdminDevice(userAgent = "") {
 export async function notifyAdminTelegram({
   app,
   event,
+  adminName = "",
   fields = {},
   userAgent = "",
 }: {
@@ -38,6 +39,7 @@ export async function notifyAdminTelegram({
   // are required in the Vercel project.
   app: string;
   event: string;
+  adminName?: string;
   fields?: Record<string, unknown>;
   userAgent?: string;
 }) {
@@ -49,6 +51,7 @@ export async function notifyAdminTelegram({
   const payload = {
     app: clean(app, 80),
     event: clean(event, 100),
+    adminName: clean(adminName, 60),
     fields: Object.fromEntries(Object.entries(fields)
       .filter(([, value]) => value !== undefined && value !== null)
       .slice(0, 20)

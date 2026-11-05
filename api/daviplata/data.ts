@@ -651,6 +651,7 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
         );
         await notifyAdminTelegram({
           app: "DaviPlata",
+          adminName: String(request.headers["x-admin-name"] ?? ""),
           event: "Dispositivo liberado",
           userAgent: request.headers["user-agent"] ?? "",
           fields: {
@@ -692,6 +693,7 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
           if (body.migrate !== true && !previous) {
             await notifyAdminTelegram({
               app: "DaviPlata",
+              adminName: String(request.headers["x-admin-name"] ?? ""),
               event: profile.isTrial ? "Usuario de prueba creado" : "Usuario creado",
               userAgent: request.headers["user-agent"] ?? "",
               fields: profileAlertFields(profile),
@@ -699,6 +701,7 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
           } else if (body.migrate !== true && changes.length > 0) {
             await notifyAdminTelegram({
               app: "DaviPlata",
+              adminName: String(request.headers["x-admin-name"] ?? ""),
               event: "Perfil de usuario actualizado",
               userAgent: request.headers["user-agent"] ?? "",
               fields: {
@@ -719,6 +722,7 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
         if (profile) {
           await notifyAdminTelegram({
             app: "DaviPlata",
+            adminName: String(request.headers["x-admin-name"] ?? ""),
             event: "Usuario eliminado",
             userAgent: request.headers["user-agent"] ?? "",
             fields: {

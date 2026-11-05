@@ -124,6 +124,15 @@ export default async function handler(request: any, response: any) {
     return;
   }
   const supplied = typeof body.pin === "string" ? body.pin : "";
+  const adminName = String(body.adminName ?? "")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+  if (!adminName) {
+    send(response, 400, { error: "Escribe tu nombre de administrador." });
+    return;
+  }
   if (!secureEqual(supplied, expectedPin)) {
     failedAttempts.set(attemptKey, {
       count: (active?.count ?? 0) + 1,
@@ -140,6 +149,7 @@ export default async function handler(request: any, response: any) {
   const userAgent = request.headers["user-agent"];
   await notifyAdminTelegram({
     app: "DaviPlata",
+    adminName,
     event: "Ingreso exitoso al panel administrativo",
     userAgent: Array.isArray(userAgent) ? userAgent[0] : String(userAgent ?? ""),
   });

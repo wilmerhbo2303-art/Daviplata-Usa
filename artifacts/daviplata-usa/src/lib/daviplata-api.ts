@@ -9,6 +9,15 @@ export class DaviplataApiError extends Error {
 }
 
 const DEVICE_TOKEN_STORAGE_PREFIX = "daviplata-usa-device-token-v1:";
+const ADMIN_NAME_STORAGE_KEY = "daviplata-admin-name-v1";
+
+function savedAdminName() {
+  try {
+    return localStorage.getItem(ADMIN_NAME_STORAGE_KEY)?.trim() ?? "";
+  } catch {
+    return "";
+  }
+}
 
 export async function daviplataApi<T>(
   action: string,
@@ -33,6 +42,9 @@ export async function daviplataApi<T>(
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(action.startsWith("admin:") && savedAdminName()
+        ? { "X-Admin-Name": savedAdminName() }
+        : {}),
     },
     body: JSON.stringify({ action, ...requestPayload }),
   });

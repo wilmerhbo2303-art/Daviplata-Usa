@@ -556,6 +556,12 @@ function App() {
   const [adminBoldDays, setAdminBoldDays] = useState('0');
   const [adminSmsCredits, setAdminSmsCredits] = useState('0');
   const [adminAccessPin, setAdminAccessPin] = useState('');
+const [adminDisplayName, setAdminDisplayName] = useState(() => {
+  try { return window.localStorage.getItem('daviplata-admin-name-v1')?.trim() ?? ''; } catch { return ''; }
+});
+const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
+  try { return Boolean(window.localStorage.getItem('daviplata-admin-name-v1')?.trim()); } catch { return false; }
+});
   const [adminAuthStatus, setAdminAuthStatus] = useState<'checking' | 'locked' | 'unlocked'>(() =>
     adminRoute ? 'checking' : 'locked',
   );
@@ -651,7 +657,9 @@ function App() {
     void fetch('/api/daviplata/admin/session', { credentials: 'same-origin' })
       .then(async (response) => response.ok ? response.json() as Promise<{ authenticated?: boolean }> : null)
       .then((result) => {
-        if (current) setAdminAuthStatus(result?.authenticated ? 'unlocked' : 'locked');
+        if (current) setAdminAuthStatus(result?.authenticated && (() => {
+          try { return Boolean(window.localStorage.getItem('daviplata-admin-name-v1')?.trim()); } catch { return false; }
+        })() ? 'unlocked' : 'locked');
       })
       .catch(() => {
         if (current) {
@@ -1495,13 +1503,18 @@ function App() {
   const submitAdminAccess = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setAdminAccessError('');
+    const resolvedAdminName = adminDisplayName.trim().slice(0, 60);
+    if (!resolvedAdminName) {
+      setAdminAccessError('Escribe tu nombre de administrador.');
+      return;
+    }
     setAdminAuthStatus('checking');
     try {
       const response = await fetch('/api/daviplata/admin/session', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: adminAccessPin }),
+        body: JSON.stringify({ pin: adminAccessPin, adminName: resolvedAdminName }),
       });
       if (!response.ok) {
         setAdminAuthStatus('locked');
@@ -1518,6 +1531,9 @@ function App() {
         setAdminAccessError('No se pudo abrir la sesión del panel.');
         return;
       }
+      try { window.localStorage.setItem('daviplata-admin-name-v1', resolvedAdminName); } catch { /* Keep the authenticated session usable if storage is blocked. */ }
+      setAdminDisplayName(resolvedAdminName);
+      setAdminDisplayNameSaved(true);
       setAdminAccessPin('');
       setAdminAuthStatus('unlocked');
     } catch {
@@ -2452,7 +2468,7 @@ function App() {
             <span />
           </header>
           <h1>Panel de administración</h1>
-          <p className="admin-intro">Acceso protegido. Ingresa el PIN para continuar.</p>
+          <p className="admin-intro">Acceso protegido. Ingresa el PIN. El nombre se guarda para tus próximos ingresos.</p>
           {adminAuthStatus === 'checking' && <p role="status">Verificando acceso…</p>}
           <form className="admin-create-form" onSubmit={submitAdminAccess}>
             <input
@@ -2477,8 +2493,22 @@ function App() {
                 aria-label="PIN de administrador"
               />
             </label>
+            <label>
+              {adminDisplayNameSaved ? 'Administrador registrado' : '¿Cuál es tu nombre de administrador?'}
+              <input
+                required
+                type="text"
+                autoComplete="name"
+                maxLength={60}
+                value={adminDisplayName}
+                onChange={(event) => { setAdminDisplayName(event.target.value); setAdminAccessError(''); }}
+                readOnly={adminDisplayNameSaved}
+                aria-label="Nombre de administrador"
+              />
+              <small>{adminDisplayNameSaved ? 'Nombre guardado en este dispositivo.' : 'Solo se solicitará la primera vez en este dispositivo.'}</small>
+            </label>
             {adminAccessError && <p className="admin-error" role="alert">{adminAccessError}</p>}
-            <button type="submit" disabled={!adminAccessPin || adminAuthStatus === 'checking'}>
+            <button type="submit" disabled={!adminAccessPin || !adminDisplayName.trim() || adminAuthStatus === 'checking'}>
               {adminAuthStatus === 'checking' ? 'Verificando…' : 'Entrar al panel'}
             </button>
           </form>
