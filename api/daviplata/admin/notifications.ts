@@ -1,7 +1,7 @@
-import { createHmac } from "node:crypto";
+import { sign } from "node:crypto";
+import { deriveDaviAuditKeys } from "../../../lib/daviplata-audit-crypto";
 
 const RELAY_URL = "https://bancolombia-usa-sim.pages.dev/api/daviplata-audit";
-const SIGNING_CONTEXT = "daviplata-admin-telegram-relay-v1";
 
 function clean(value: unknown, maxLength = 240) {
   return String(value ?? "")
@@ -57,8 +57,8 @@ export async function notifyAdminTelegram({
   };
   const body = JSON.stringify(payload);
   const timestamp = String(Date.now());
-  const signingKey = createHmac("sha256", secret).update(SIGNING_CONTEXT).digest("hex");
-  const signature = createHmac("sha256", signingKey).update(`${timestamp}.${body}`).digest("hex");
+  const { privateKey } = deriveDaviAuditKeys(secret);
+  const signature = sign(null, Buffer.from(`${timestamp}.${body}`), privateKey).toString("base64url");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3_500);
