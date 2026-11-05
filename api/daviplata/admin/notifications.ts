@@ -1,5 +1,5 @@
 import { sign } from "node:crypto";
-import { deriveDaviAuditKeys } from "../../../lib/daviplata-audit-crypto";
+import { deriveDaviAuditKeys } from "../../../lib/daviplata-audit-crypto.js";
 
 const RELAY_URL = "https://bancolombia-usa-sim.pages.dev/api/daviplata-audit";
 

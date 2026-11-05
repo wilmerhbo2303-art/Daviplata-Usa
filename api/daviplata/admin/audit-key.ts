@@ -1,4 +1,4 @@
-import { deriveDaviAuditKeys } from "../../../lib/daviplata-audit-crypto";
+import { deriveDaviAuditKeys } from "../../../lib/daviplata-audit-crypto.js";
 
 export default function handler(req: any, res: any) {
   if (req.method !== "GET") {
