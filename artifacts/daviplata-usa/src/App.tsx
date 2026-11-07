@@ -520,6 +520,7 @@ function App() {
     }
   });
   const [userSessionReady, setUserSessionReady] = useState(false);
+  const userStateVersionRef = useRef<string | null>(null);
   const [adminProfilesReady, setAdminProfilesReady] = useState(false);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(() => {
     try {
@@ -856,7 +857,36 @@ const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
   useEffect(() => {
     if (!activeProfileId || !userApiToken || !userSessionReady) return;
     const timeout = window.setTimeout(() => {
-      void daviplataApi('user:saveState', { state: data }, userApiToken).catch((error) => {
+      void daviplataApi<{ saved: boolean; stateVersion: string }>(
+        'user:saveState',
+        { state: data, stateVersion: userStateVersionRef.current },
+        userApiToken,
+      ).then((result) => {
+        userStateVersionRef.current = result.stateVersion;
+      }).catch(async (error) => {
+        if (error instanceof DaviplataApiError && error.status === 409) {
+          try {
+            const latest = await daviplataApi<{
+              profile: DemoUser;
+              state: DemoData | null;
+              stateVersion: string | null;
+            }>('user:restore', {}, userApiToken);
+            if (latest.profile.id !== activeProfileId) return;
+            userStateVersionRef.current = latest.stateVersion;
+            const profile = { ...latest.profile, pin: '' };
+            setUsers((current) => current.map((user) => user.id === profile.id ? { ...user, ...profile } : user));
+            if (latest.state &&
+              typeof latest.state.balance === 'number' &&
+              Array.isArray(latest.state.contacts) &&
+              Array.isArray(latest.state.movements)) {
+              setData(latest.state);
+            }
+            setToast('La cuenta se actualizó con los cambios del panel.');
+          } catch {
+            setToast('No se pudo sincronizar la cuenta. Intenta actualizar la aplicación.');
+          }
+          return;
+        }
         if (error instanceof DaviplataApiError && [401, 403, 410].includes(error.status)) {
           returnToOnboarding();
           setToast(error.message);
@@ -892,7 +922,23 @@ const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
     let active = true;
     const validateSession = async () => {
       try {
-        await daviplataApi('user:restore', {}, userApiToken);
+        const latest = await daviplataApi<{
+          profile: DemoUser;
+          state: DemoData | null;
+          stateVersion: string | null;
+        }>('user:restore', {}, userApiToken);
+        if (!active || latest.profile.id !== activeProfileId) return;
+        const profile = { ...latest.profile, pin: '' };
+        setUsers((current) => current.map((user) => user.id === profile.id ? { ...user, ...profile } : user));
+        if (latest.stateVersion !== userStateVersionRef.current) {
+          userStateVersionRef.current = latest.stateVersion;
+          if (latest.state &&
+            typeof latest.state.balance === 'number' &&
+            Array.isArray(latest.state.contacts) &&
+            Array.isArray(latest.state.movements)) {
+            setData(latest.state);
+          }
+        }
       } catch (error) {
         if (
           active &&
@@ -904,7 +950,7 @@ const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
         }
       }
     };
-    const interval = window.setInterval(() => void validateSession(), 30_000);
+    const interval = window.setInterval(() => void validateSession(), 15_000);
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') void validateSession();
     };
@@ -1465,6 +1511,7 @@ const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
   const returnToOnboarding = () => {
     setUserSessionReady(false);
     setUserApiToken('');
+    userStateVersionRef.current = null;
     try {
       sessionStorage.removeItem(USER_TOKEN_STORAGE_KEY);
     } catch {
@@ -1945,6 +1992,7 @@ const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
         deviceToken: string;
         profile: DemoUser;
         state: DemoData | null;
+        stateVersion: string | null;
       }>('auth:login', { id: activeProfile.id, pin: pinValue });
       const profile = { ...result.profile, pin: '' };
       const biometricKey = `davi-usa:biometric:${profile.id}`;
@@ -1958,6 +2006,7 @@ const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
         // Keep this login usable even if browser storage is unavailable.
       }
       setUserApiToken(result.token);
+      userStateVersionRef.current = result.stateVersion;
       setUsers((current) => current.some((user) => user.id === profile.id)
         ? current.map((user) => user.id === profile.id ? { ...user, ...profile } : user)
         : [...current, profile]);
@@ -2058,8 +2107,10 @@ const [adminDisplayNameSaved, setAdminDisplayNameSaved] = useState(() => {
         const result = await daviplataApi<{
           profile: DemoUser;
           state: DemoData | null;
+          stateVersion: string | null;
         }>('user:restore', {}, biometricToken);
         const profile = { ...result.profile, pin: '' };
+        userStateVersionRef.current = result.stateVersion;
         setUserApiToken(biometricToken);
         try {
           sessionStorage.setItem(USER_TOKEN_STORAGE_KEY, biometricToken);

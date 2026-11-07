@@ -325,23 +325,44 @@ function profileAlertFields(profile: ProfileInput) {
   };
 }
 
-async function readState(profileId: string) {
-  const result = await d1<{ state_json: string }>("SELECT state_json FROM davi_account_state WHERE profile_id = ? LIMIT 1", [profileId]);
+async function readStateSnapshot(profileId: string) {
+  const result = await d1<{ state_json: string; updated_at: string }>(
+    "SELECT state_json, updated_at FROM davi_account_state WHERE profile_id = ? LIMIT 1",
+    [profileId],
+  );
   if (!result.results?.[0]) return null;
   try {
-    return JSON.parse(result.results[0].state_json);
+    return {
+      state: JSON.parse(result.results[0].state_json) as Record<string, unknown>,
+      version: String(result.results[0].updated_at),
+    };
   } catch {
     return null;
   }
 }
 
-async function saveState(profileId: string, state: unknown) {
+async function saveState(
+  profileId: string,
+  state: unknown,
+  expectedVersion: string | null = null,
+  profileBalance: number | null = null,
+) {
   if (!state || typeof state !== "object" || Array.isArray(state)) throw new Error("INVALID_STATE");
   const serialized = JSON.stringify(state);
   if (serialized.length > 900_000) throw new Error("STATE_TOO_LARGE");
   const balance = Number((state as { balance?: unknown }).balance);
   if (!Number.isFinite(balance) || balance < 0) throw new Error("INVALID_STATE");
-  const now = new Date().toISOString();
+  const current = await readStateSnapshot(profileId);
+  if (current && expectedVersion && expectedVersion !== current.version) {
+    return { conflict: true as const, current };
+  }
+  // Older cached clients do not send a version. Never let their stale balance
+  // overwrite a value that the administrator has just changed in the profile.
+  if (current && !expectedVersion && profileBalance !== null && balance !== profileBalance) {
+    return { conflict: true as const, current };
+  }
+  const previousTime = Date.parse(current?.version ?? "");
+  const now = new Date(Math.max(Date.now(), Number.isFinite(previousTime) ? previousTime + 1 : 0)).toISOString();
   await d1(
     `INSERT INTO davi_account_state (profile_id, state_json, updated_at)
      VALUES (?, ?, ?)
@@ -349,6 +370,7 @@ async function saveState(profileId: string, state: unknown) {
     [profileId, serialized, now],
   );
   await d1("UPDATE davi_profiles SET balance = ?, updated_at = ? WHERE id = ?", [balance, now, profileId]);
+  return { conflict: false as const, version: now };
 }
 
 async function consumeAttempt(request: Request, category: string) {
@@ -553,11 +575,13 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
       }
       await clearAttempts(request, "login");
       const token = createUserToken(id, deviceHash, deviceGeneration);
+      const stateSnapshot = await readStateSnapshot(id);
       response.json({
         token,
         deviceToken,
         profile: mapProfile(row),
-        state: await readState(id),
+        state: stateSnapshot?.state ?? null,
+        stateVersion: stateSnapshot?.version ?? null,
       });
       return;
     }
@@ -590,12 +614,29 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
         return;
       }
       if (action === "user:restore") {
-        response.json({ profile: mapProfile(row), state: await readState(profileId) });
+        const snapshot = await readStateSnapshot(profileId);
+        response.json({
+          profile: mapProfile(row),
+          state: snapshot?.state ?? null,
+          stateVersion: snapshot?.version ?? null,
+        });
         return;
       }
       if (action === "user:saveState") {
-        await saveState(profileId, body.state);
-        response.json({ saved: true });
+        const snapshot = await saveState(
+          profileId,
+          body.state,
+          typeof body.stateVersion === "string" ? body.stateVersion : null,
+          Number(row.balance),
+        );
+        if (snapshot.conflict) {
+          response.status(409).json({
+            error: "Los datos de esta cuenta cambiaron desde administración.",
+            stateVersion: snapshot.current.version,
+          });
+          return;
+        }
+        response.json({ saved: true, stateVersion: snapshot.version });
         return;
       }
       const displayBalance = body.displayBalance === null || body.displayBalance === undefined
@@ -690,6 +731,19 @@ router.post("/daviplata/data", async (request: Request, response: Response) => {
           const previous = previousProfiles.get(profile.id);
           const changes = previous ? profileChangedFields(previous, profile) : [];
           await saveProfile(profile);
+          if (previous && Number(previous.balance) !== profile.balance) {
+            let currentState = await readStateSnapshot(profile.id);
+            for (let attempt = 0; attempt < 2 && currentState?.state; attempt += 1) {
+              const synced = await saveState(
+                profile.id,
+                { ...currentState.state, balance: profile.balance },
+                currentState.version,
+                profile.balance,
+              );
+              if (!synced.conflict) break;
+              currentState = synced.current;
+            }
+          }
           if (body.migrate === true && profile.state) await saveState(profile.id, profile.state);
           if (body.migrate !== true && !previous) {
             await notifyAdminTelegram({
